@@ -36,7 +36,8 @@ if __name__ == "__main__":
     print("n_hidden_layers = "+str(n_hidden_layers))
     
     # kernel = "baseline"
-    kernel = "xnor"
+    # kernel = "xnor"
+    kernel = "myxnor"
     # kernel = "theano"
     print("kernel = "+ kernel)
     

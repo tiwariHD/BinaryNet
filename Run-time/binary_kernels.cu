@@ -2,6 +2,40 @@
 #include <stdio.h>
 #define BLOCK_SIZE 16
 
+#define DIM_X  16
+#define DIM_Y  16
+
+// headers for my kernel implementation
+// =============================================================================
+// A x B
+// size of work for a thread block
+#define BLK_M_nn  96
+#define BLK_N_nn  96
+
+#define BLK_K  16
+
+// size of thread block for reading A (dev->regs->shmem)
+#define DIM_XA  32
+#define DIM_YA  8
+
+// size of thread block for reading B (dev->regs->shmem)
+#define DIM_XB  8
+#define DIM_YB  32
+
+// =============================================================================
+#define BLK_M BLK_M_nn
+#define BLK_N BLK_N_nn
+// =============================================================================
+
+// size of work for a thread
+#define THR_M ( BLK_M / DIM_X )
+#define THR_N ( BLK_N / DIM_Y )
+
+/******************************************************************************/
+
+#define min(a, b) ((a) < (b) ? (a) : (b))
+
+
 // CUDA tutorial: http://www.nvidia.com/docs/IO/116711/sc11-cuda-c-basics.pdf
 // http://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory
 // A is shape (m,n), B is shape (n,k) and C is shape (m,k)
@@ -182,3 +216,181 @@ __global__ void xnor_gemm(unsigned int* A, unsigned int* B, float* C, int m, int
     // Each thread writes one element
     if(col + blockCol* BLOCK_SIZE< k && row + blockRow* BLOCK_SIZE< m) Csub[row*k+col] = -(2*(float)Cvalue-32*n);
 }
+
+
+__global__ void my_xnor_gemm_kernel(
+    int M, int N, int K,
+    const unsigned int* __restrict__ A, int LDA,
+    const unsigned int* __restrict__ B, int LDB,
+    float*       __restrict__ C, int LDC,
+    int offsetA, int offsetB )
+{
+
+    int idx = threadIdx.x;  // thread's m dimension
+    int idy = threadIdx.y;  // thread's n dimension
+
+    int idt = DIM_X * idy + idx;    // thread's global number
+
+    int idxA = idt % DIM_XA;    // idx within A
+    int idyA = idt / DIM_XA;    // idy within A
+
+    int idxB = idt % DIM_XB;    // idx within B
+    int idyB = idt / DIM_XB;    // idy within B
+
+    int blx = blockIdx.x;   // block's m dimension
+    int bly = blockIdx.y;   // block's n dimension
+
+    __shared__ unsigned int sA[BLK_K][BLK_M+1];      // +1 only required if A is transposed
+    __shared__ unsigned int sB[BLK_N][BLK_K+1];      // +1 always required
+
+    // Registers for the innermost loop
+    unsigned int rC[THR_N][THR_M];
+    unsigned int rA[THR_M];
+    unsigned int rB[THR_N];
+
+    // Registers for the dev->shmem copy
+    unsigned int ra[BLK_K/DIM_YA][BLK_M/DIM_XA];
+    unsigned int rb[BLK_N/DIM_YB][BLK_K/DIM_XB];
+
+    const unsigned int  *offs_dA = A + blx*BLK_M     + idyA*LDA + idxA;
+    ptrdiff_t boundA = (LDA*(K-1) + M) - (blx*BLK_M + idyA*LDA + idxA) - 1;
+    const unsigned int *offs_dB = B + bly*BLK_N*LDB + idyB*LDB + idxB;
+    ptrdiff_t boundB = (LDB*(N-1) + K) - ( bly*BLK_N*LDB + idyB*LDB + idxB ) -1;
+
+    int m, n, k, kk;
+
+    // Zero C
+    #pragma unroll
+    for (n = 0; n < THR_N; n++)
+        #pragma unroll
+        for (m = 0; m < THR_M; m++)
+            rC[n][m] = 0;
+
+    // Load A dev->shmem
+        #pragma unroll
+        for (n = 0; n < BLK_K; n += DIM_YA)
+            #pragma unroll
+            for (m = 0; m < BLK_M; m += DIM_XA)
+                sA[n+idyA][m+idxA] = offs_dA[min(n*LDA+m, boundA)];
+
+    // Load B dev->shmem
+        #pragma unroll
+        for (n = 0; n < BLK_N; n += DIM_YB)
+            #pragma unroll
+            for (m = 0; m < BLK_K; m += DIM_XB)
+                sB[n+idyB][m+idxB] = offs_dB[min(n*LDB+m, boundB)];
+
+    __syncthreads();
+
+    for (kk = 0; kk < K-BLK_K; kk += BLK_K)
+    {
+        offs_dA += BLK_K*LDA;
+        boundA  -= BLK_K*LDA;
+        offs_dB += BLK_K;
+        boundB  -= BLK_K;
+
+        // Load A dev->regs
+            #pragma unroll
+            for (n = 0; n < BLK_K/DIM_YA; n++)
+                #pragma unroll
+                for (m = 0; m < BLK_M/DIM_XA; m++)
+                    ra[n][m] = offs_dA[min(n*DIM_YA*LDA + m*DIM_XA, boundA)];
+
+        // Load B dev->regs
+            #pragma unroll
+            for (n = 0; n < BLK_N/DIM_YB; n++)
+                #pragma unroll
+                for (m = 0; m < BLK_K/DIM_XB; m++)
+                    rb[n][m] = offs_dB[min(n*DIM_YB*LDB + m*DIM_XB, boundB)];
+
+        // Multiply
+        #pragma unroll
+        for (k = 0; k < BLK_K; k++)
+        {
+            // Load A shmem->regs
+            #pragma unroll
+            for (m = 0; m < THR_M; m++)
+                rA[m] = sA[k][m*DIM_X+idx];
+
+            // Load B shmem->regs
+            #pragma unroll
+            for (n = 0; n < THR_N; n++)
+                rB[n] = sB[n*DIM_Y+idy][k];
+
+            // Compute
+            #pragma unroll
+            for (n = 0; n < THR_N; n++) {
+                #pragma unroll
+                for (m = 0; m < THR_M; m++) {
+                        rC[n][m] += __popc(rA[m] ^ rB[n]);
+                }
+            }
+        }
+
+        __syncthreads();
+
+        // Load A regs->shmem
+            #pragma unroll
+            for (n = 0; n < BLK_K/DIM_YA; n++)
+                #pragma unroll
+                for (m = 0; m < BLK_M/DIM_XA; m++)
+                    sA[n*DIM_YA+idyA][m*DIM_XA+idxA] = ra[n][m];
+
+        // Load B regs->shmem
+            #pragma unroll
+            for (n = 0; n < BLK_N/DIM_YB; n++)
+                #pragma unroll
+                for (m = 0; m < BLK_K/DIM_XB; m++)
+                    sB[n*DIM_YB+idyB][m*DIM_XB+idxB] = rb[n][m];
+
+        __syncthreads();
+    }
+
+    // Multiply last full (BLK_K) or partial block of
+    // columns of op(A) and rows of op(B).
+    // It's okay that m,n exceed matrix bounds as all work is in registers
+    // or shared memory, and out-of-bounds rC[n][m] will not be saved later.
+    kk = K - kk;
+    #pragma unroll
+    for (k = 0; k < kk; k++)
+    {
+        // Load A shmem->regs
+        #pragma unroll
+        for (m = 0; m < THR_M; m++)
+            rA[m] = sA[k][m*DIM_X+idx];
+
+        // Load B shmem->regs
+        #pragma unroll
+        for (n = 0; n < THR_N; n++)
+            rB[n] = sB[n*DIM_Y+idy][k];
+
+        // Compute
+        #pragma unroll
+        for (n = 0; n < THR_N; n++) {
+            #pragma unroll
+            for (m = 0; m < THR_M; m++) {
+                    rC[n][m] += __popc(rA[m] ^ rB[n]);
+            }
+        }
+    }
+
+    // Store C regs->dev
+    #pragma unroll
+    for (n = 0; n < THR_N; n++) {
+        int coord_dCn = bly*BLK_N + n*DIM_Y + idy;
+        #pragma unroll
+        for (m = 0; m < THR_M; m++) {
+            int coord_dCm = blx*BLK_M + m*DIM_X + idx;
+            if (coord_dCm < M && coord_dCn < N) {
+                int offsC = coord_dCn*LDC + coord_dCm;
+
+                unsigned int &regC = rC[n][m];
+                float &memC = C[offsC];
+
+		memC = -((2 * (float)regC) - (32 * K));
+            }
+        }
+    }
+}
+
+
