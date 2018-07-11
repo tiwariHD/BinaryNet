@@ -55,6 +55,37 @@ int main() {
 	};
 	float* result_xnor = test_xnor();
 
+	auto test_my_xnor = [&]() {
+		unsigned int *Aconc, *Bconc;
+		cudaMalloc(&Aconc, M * N * 4 / 32);
+		cudaMalloc(&Bconc, N * K * 4 / 32);
+		cudaMemset(fC, 0, M * K * sizeof(float));
+
+		auto start = chrono::high_resolution_clock::now();
+		int block = 64, grid = M * N / (block * 32)  + 1;
+		concatenate_rows_kernel<<<grid, block>>>(fA, Aconc, M * N / 32);
+
+		grid = K / block + 1;
+		concatenate_cols_kernel<<<grid, block>>>(fB, Bconc, N, K);
+		cudaDeviceSynchronize();
+
+		dim3 blockDim(16, 16);
+		int gridSize1 = ceil(static_cast<float>(K) / static_cast<float>(96));
+		int gridSize2 = ceil(static_cast<float>(M) / static_cast<float>(96));
+		dim3 gridDim(gridSize1, gridSize2);
+		my_xnor_gemm_kernel<<<gridDim, blockDim, 0>>>(K, M, N/32, Bconc, K, Aconc, N/32, fC, K, 0, 0);
+		cudaDeviceSynchronize();
+
+		auto end = chrono::high_resolution_clock::now();
+		chrono::duration<double> diff = end - start;
+		cout << "MY XNOR GEMM kernel time: " << diff.count() << " s\n";
+
+		float* result = (float*)malloc(M * K * sizeof(float));
+		cudaMemcpy(result, fC, M * K * sizeof(float), cudaMemcpyDeviceToHost);
+		return result;
+        };
+        float* result_my_xnor = test_my_xnor();
+
 
 	auto test_gemm = [&]() {
 		cudaMemset(fC, 0, N * N * sizeof(int));
@@ -105,6 +136,7 @@ int main() {
 		return true;
 	};
 
+	printf("success: %d\n", check_result(result_gemm, result_my_xnor));
 	printf("success: %d\n", check_result(result_gemm, result_xnor));
 	printf("success: %d\n", check_result(result_gemm, result_cublas));
 

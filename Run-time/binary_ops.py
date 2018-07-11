@@ -246,7 +246,7 @@ class MyXnorGemm(cuda.GpuOp):
             block_size = 16
             block = (block_size,block_size, 1)
             grid = (gdSize1, gdSize2) # better too many blocks than too little
-            magma_mod_kernel(np.intc(k), np.intc(m), np.intc(n/32), Bc, np.intc(k), Ac, np.intc(n/32), C[0], np.intc(k),
+            my_xnor_kernel(np.intc(k), np.intc(m), np.intc(n/32), Bc, np.intc(k), Ac, np.intc(n/32), C[0], np.intc(k),
             np.intc(0), np.intc(0), block= block, grid=grid)
             
         thunk.inputs = inputs
