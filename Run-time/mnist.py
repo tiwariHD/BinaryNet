@@ -35,10 +35,10 @@ if __name__ == "__main__":
     n_hidden_layers = 3
     print("n_hidden_layers = "+str(n_hidden_layers))
     
-    # kernel = "baseline"
-    # kernel = "xnor"
+    #kernel = "baseline"
+    #kernel = "xnor"
     kernel = "myxnor"
-    # kernel = "theano"
+    #kernel = "theano"
     print("kernel = "+ kernel)
     
     print('Loading MNIST dataset...')
@@ -62,7 +62,7 @@ if __name__ == "__main__":
             mlp,
             nonlinearity=lasagne.nonlinearities.identity,
             num_units=num_units,
-            kernel = "baseline")               
+            kernel="baseline")       
         
     mlp = lasagne.layers.BatchNormLayer(mlp)
     mlp = lasagne.layers.NonlinearityLayer(mlp,nonlinearity=binary_ops.SignTheano)
@@ -73,7 +73,7 @@ if __name__ == "__main__":
                 mlp,
                 nonlinearity=lasagne.nonlinearities.identity,
                 num_units=num_units,
-                kernel = kernel)               
+                kernel=kernel)              
         
         mlp = lasagne.layers.BatchNormLayer(mlp)
         mlp = lasagne.layers.NonlinearityLayer(mlp,nonlinearity=binary_ops.SignTheano)
@@ -82,7 +82,7 @@ if __name__ == "__main__":
                 mlp, 
                 nonlinearity=lasagne.nonlinearities.identity,
                 num_units=10,
-                kernel = kernel)
+                kernel=kernel)
     
     mlp = lasagne.layers.BatchNormLayer(mlp)
     test_output = lasagne.layers.get_output(mlp, deterministic=True)
@@ -107,11 +107,22 @@ if __name__ == "__main__":
     
     print('Running...')
     
-    start_time = time.time()
-    
-    test_error = val_fn(test_set.X,test_set.y)*100.
-    print "test_error = " + str(test_error) + "%"
-    
-    run_time = time.time() - start_time
-    print("run_time = "+str(run_time)+"s")
-    
+    print("kernel, batch_size, test_error, time, imgs")
+
+    iters = 10
+    seqw = [1, 10, 100, 1000, 10000]
+    for i in seqw:
+        ter = 0.0
+        rt = 0.0
+        for j in range(1, 11):
+            start_time = time.time()
+            test_error = val_fn(test_set.X[:i],test_set.y[:i])*100.
+            run_time = time.time() - start_time
+            ter = ter + test_error
+            rt = rt + run_time
+
+        ter = ter/iters
+        rt = rt/iters
+        ims = i/rt
+        print(kernel + ", " + str(i) + ", " + str(ter) + ", " +str(rt*1000)+ ", " + str(ims))
+

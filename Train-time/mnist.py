@@ -45,7 +45,7 @@ if __name__ == "__main__":
     print("n_hidden_layers = "+str(n_hidden_layers))
     
     # Training parameters
-    num_epochs = 1000
+    num_epochs = 100
     print("num_epochs = "+str(num_epochs))
     
     # Dropout parameters

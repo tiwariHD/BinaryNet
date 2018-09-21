@@ -74,6 +74,9 @@ if __name__ == "__main__":
     print("train_set_size = "+str(train_set_size))
     shuffle_parts = 1
     print("shuffle_parts = "+str(shuffle_parts))
+
+    save_path = "cifar10_parameters.npz"
+    print("save_path = "+str(save_path))
     
     print('Loading CIFAR-10 dataset...')
     
@@ -339,4 +342,5 @@ if __name__ == "__main__":
             train_set.X,train_set.y,
             valid_set.X,valid_set.y,
             test_set.X,test_set.y,
+            save_path,
             shuffle_parts=shuffle_parts)

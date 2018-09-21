@@ -13,6 +13,7 @@ import theano.sandbox.cuda as cuda
 from theano.sandbox.cuda.basic_ops import host_from_gpu
 
 import lasagne
+import myblas
 
 # Homemade (and very unoptimized) 
 # Theano GPU matrix multiplication operation
@@ -231,14 +232,16 @@ class MyXnorGemm(cuda.GpuOp):
             block_size = 64            
             block = (block_size,1,1)
             grid = (m*n/(block_size*32)+1,1)
-            concatenate_rows_kernel(A,Ac, np.intc(m*n/32), block= block, grid=grid)
+            concatenate_rows_kernel(A,Ac, np.intc(m*n/32), block=block,
+                grid=grid)
             
             # Concatenating the columns of B
             Bc = drv.mem_alloc(n*k*4/32)  
             block_size = 64 
             block = (block_size,1,1)
             grid = (k/block_size+1,1)
-            concatenate_cols_kernel(B,Bc, np.intc(n), np.intc(k), block= block, grid=grid)
+            concatenate_cols_kernel(B,Bc, np.intc(n), np.intc(k),
+                block=block, grid=grid)
 
             # Launching xnor_kernel
             gdSize1 = int(np.ceil(k/96.))
@@ -246,8 +249,9 @@ class MyXnorGemm(cuda.GpuOp):
             block_size = 16
             block = (block_size,block_size, 1)
             grid = (gdSize1, gdSize2) # better too many blocks than too little
-            my_xnor_kernel(np.intc(k), np.intc(m), np.intc(n/32), Bc, np.intc(k), Ac, np.intc(n/32), C[0], np.intc(k),
-            np.intc(0), np.intc(0), block= block, grid=grid)
+            my_xnor_kernel(np.intc(k), np.intc(m), np.intc(n/32), Bc,
+                np.intc(k), Ac, np.intc(n/32), C[0], np.intc(k),
+            np.intc(0), np.intc(0), block=block, grid=grid)
             
         thunk.inputs = inputs
         thunk.outputs = outputs
@@ -277,7 +281,7 @@ class DenseLayer(lasagne.layers.DenseLayer):
             # if the input has more than two dimensions, flatten it into a
             # batch of feature vectors.
             input = input.flatten(2)
-        
+
         if self.kernel == "baseline":
             activation = gemm(input, self.W)
         
@@ -293,6 +297,50 @@ class DenseLayer(lasagne.layers.DenseLayer):
         if self.b is not None:
             activation = activation + self.b.dimshuffle('x', 0)
         return self.nonlinearity(activation)
+
+class Conv2DLayer(lasagne.layers.Conv2DLayer):
+
+    def __init__(self, incoming, num_filters, filter_size,
+        convOp="cudnn", **kwargs):
+        super(Conv2DLayer, self).__init__(incoming, num_filters, filter_size,
+            **kwargs)
+        self.convOp = convOp
+
+
+    def convolve(self, input, **kwargs):
+        border_mode = 'half' if self.pad == 'same' else self.pad
+        extra_kwargs = {}
+        if self.num_groups > 1:  # pragma: no cover
+            extra_kwargs['num_groups'] = self.num_groups
+
+        if self.convOp == "cudnn":
+            conved = T.nnet.conv2d(input, self.W, self.input_shape,
+                self.get_W_shape(), subsample=self.stride,
+                border_mode=border_mode, filter_flip=self.flip_filters,
+                **extra_kwargs)
+        
+        else:
+            if self.convOp == "cublas":
+                corr_mm_op = myblas.GpuCorrMM(subsample=self.stride,
+                    border_mode=border_mode, **extra_kwargs)
+        
+            if self.convOp == "myconv":
+                corr_mm_op = myblas.GpuCorrMM(subsample=self.stride,
+                    border_mode=border_mode, binary=True, **extra_kwargs)
+
+            filters = self.W
+            if self.flip_filters:
+                filters = filters[:, :, ::-1, ::-1]  # flip top-down, left-right
+
+            contiguous_filters = cuda.basic_ops.gpu_contiguous(filters)
+            contiguous_input = cuda.basic_ops.gpu_contiguous(input)
+            
+
+            conved = corr_mm_op(contiguous_input, contiguous_filters)
+        
+	return conved
+
+ 
     
 # Test suite
 if __name__ == "__main__":   

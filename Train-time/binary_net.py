@@ -95,7 +95,8 @@ class DenseLayer(lasagne.layers.DenseLayer):
         self.W_LR_scale = W_LR_scale
         if W_LR_scale == "Glorot":
             num_inputs = int(np.prod(incoming.output_shape[1:]))
-            self.W_LR_scale = np.float32(1./np.sqrt(1.5/ (num_inputs + num_units)))
+            #self.W_LR_scale = np.float32(1./np.sqrt(1.5/ (num_inputs + num_units)))
+            self.W_LR_scale = np.float32(1./(1.5/ (num_inputs + num_units)))
 
         self._srng = RandomStreams(lasagne.random.get_rng().randint(1, 2147462579))
         
@@ -123,7 +124,7 @@ class DenseLayer(lasagne.layers.DenseLayer):
 class Conv2DLayer(lasagne.layers.Conv2DLayer):
     
     def __init__(self, incoming, num_filters, filter_size,
-        binary = True, stochastic = True, H=1.,W_LR_scale="Glorot", **kwargs):
+        binary = True, stochastic = True, H=1., W_LR_scale = "Glorot", **kwargs):
         
         self.binary = binary
         self.stochastic = stochastic
@@ -139,7 +140,8 @@ class Conv2DLayer(lasagne.layers.Conv2DLayer):
         if W_LR_scale == "Glorot":
             num_inputs = int(np.prod(filter_size)*incoming.output_shape[1])
             num_units = int(np.prod(filter_size)*num_filters) # theoretically, I should divide num_units by the pool_shape
-            self.W_LR_scale = np.float32(1./np.sqrt(1.5 / (num_inputs + num_units)))
+            #self.W_LR_scale = np.float32(1./np.sqrt(1.5 / (num_inputs + num_units)))
+            self.W_LR_scale = np.float32(1./(1.5 / (num_inputs + num_units)))
             # print("W_LR_scale = "+str(self.W_LR_scale))
             
         self._srng = RandomStreams(lasagne.random.get_rng().randint(1, 2147462579))
@@ -158,6 +160,18 @@ class Conv2DLayer(lasagne.layers.Conv2DLayer):
         self.W = self.Wb
             
         rvalue = super(Conv2DLayer, self).convolve(input, **kwargs)
+        
+        self.W = Wr
+        
+        return rvalue
+        
+    def get_output_for(self, input, deterministic=False, **kwargs):
+        
+        self.Wb = binarization(self.W, self.H, self.binary, deterministic, self.stochastic, self._srng)
+        Wr = self.W
+        self.W = self.Wb
+        
+        rvalue = super(Conv2DLayer, self).get_output_for(input, **kwargs)
         
         self.W = Wr
         
@@ -317,4 +331,6 @@ def train(train_fn,val_fn,
         print("  test error rate:               "+str(test_err)+"%") 
         
         # decay the LR
-        LR *= LR_decay
+        if (epoch+1) % 4 == 0:
+            LR *= LR_decay
+
